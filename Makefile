@@ -13,3 +13,7 @@ format-commit:
 	make format
 	git add .
 	git commit -m'formatting'
+
+format-push:
+	make format-commit
+	git push
