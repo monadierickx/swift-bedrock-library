@@ -313,7 +313,95 @@ print("Assistant: \(reply)")
 To use streaming use the exact same `ConverseRequestBuilder`, but use the `converseStream` function instead of the `converse` function.
 
 ```swift
-// TODO
+let bedrock = try await BedrockService(authentication: .sso())
+let model: BedrockModel = .claudev3_7_sonnet
+
+// define the inputschema for your tool
+let schema = JSON(with: [
+    "type": "object",
+    "properties": [
+        "sign": [
+            "type": "string",
+            "description":
+                "The call sign for the radio station for which you want the most popular song. Example calls signs are WZPZ, StuBru and Klara.",
+        ]
+    ],
+    "required": [
+        "sign"
+    ],
+])
+
+// pass a prompt and the tool to converse
+var builder = try ConverseRequestBuilder(with: model)
+    .withPrompt("Introduce yourself and mention the tools you have access to?")
+    .withTool(
+        name: "top_song",
+        inputSchema: schema,
+        description: "Get the most popular song played on a radio station."
+    )
+
+var stream: AsyncThrowingStream<ConverseStreamElement, any Error>
+var assistantMessage: Message = Message("empty")
+
+// start a loop to interact with the user
+while true {
+    var prompt: String = ""
+    var indexes: [Int] = []
+    var toolRequests: [ToolUseBlock] = []
+
+    // create the stream by calling the converseStream function
+    stream = try await bedrock.converseStream(with: builder)
+
+    // process the stream
+    for try await element in stream {
+        switch element {
+        case .contentSegment(let contentSegment):
+            switch contentSegment {
+            case .text(let index, let text):
+                if !indexes.contains(index) {
+                    indexes.append(index)
+                    print("\nAssistant: ")
+                }
+                print(text, terminator: "")
+            default:
+                break
+            }
+        case .contentBlockComplete(_, let content):
+            print("\n")
+            if case .toolUse(let toolUse) = content {
+                toolRequests.append(toolUse)
+            }
+        case .messageComplete(let message):
+            assistantMessage = message
+        }
+    }
+
+    // if a request to use a tool was made by the model, use the information in the input to return the correct information back to the model in a ToolResultBlock
+    if !toolRequests.isEmpty {
+        for toolUse in toolRequests {
+            print("found tool use")
+            print(toolUse)
+            if toolUse.name == "top_song" {
+                let sign: String? = toolUse.input["sign"]
+                if let sign {
+                    let song = try await getMostPopularSong(sign: sign)
+                    builder = try ConverseRequestBuilder(from: builder, with: assistantMessage)
+                        .withToolResult(song)
+                }
+            }
+        }
+    } else { 
+        // if no request to use a tool was made, no ToolResultBlock needs to be returned and the user can ask the next question
+        print("\nYou: ")
+        prompt = readLine()!
+        if prompt == "done" {
+            break
+        }
+
+        builder = try ConverseRequestBuilder(from: builder, with: assistantMessage)
+            .withPrompt(prompt)
+    }
+}
 ```
 
 ### Reasoning
